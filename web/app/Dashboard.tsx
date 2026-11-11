@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import type { Analysis, Report, ScreenResult } from "../lib/types";
 import { planAll, type ExitPlan } from "../lib/exit";
+import { pickEntries, type EntryPlan } from "../lib/entry";
 import { CAT, Donut, HBars, RangeBar, Scatter, Stacked, type Slice } from "./charts";
 
 const inr = (n: number) => (n < 0 ? "-" : "") + "₹" + Math.abs(Math.round(n)).toLocaleString("en-IN");
@@ -15,10 +16,10 @@ const stanceColor = (s: string) => (s === "Aligned positive" ? "var(--pos)" : s 
 const trendColor: Record<string, string> = { Uptrend: "var(--pos)", Recovering: "var(--c1)", Weakening: "var(--warn)", Downtrend: "var(--neg)" };
 
 type Row = { r: ScreenResult; id: string; s: string; qty: number; ltp: number; value: number; cost: number; w: number; pnlAbs: number; pnlPct: number; sector: string; color: string };
-type View = "overview" | "holdings" | "exit" | "analytics";
+type View = "overview" | "holdings" | "exit" | "entry" | "analytics";
 type SortKey = "value" | "pnlPct" | "rsi" | "quant" | "news";
 
-export default function Dashboard({ report: initial, file: initialFile, rules, claude }: { report: Report; file: string; rules: Record<string, unknown>; claude: boolean }) {
+export default function Dashboard({ report: initial, candidates, file: initialFile, rules, claude }: { report: Report; candidates: ScreenResult[]; file: string; rules: Record<string, unknown>; claude: boolean }) {
   const [report, setReport] = useState<Report>(initial);
   const [file, setFile] = useState(initialFile);
   const [kite, setKite] = useState<{ authUrl?: string; note?: string } | null>(null);
@@ -28,6 +29,7 @@ export default function Dashboard({ report: initial, file: initialFile, rules, c
   const [done, setDone] = useState(0);
   const [sel, setSel] = useState<string | null>(null);
   const [brief, setBrief] = useState<string | null>(null);
+  const [mail, setMail] = useState<{ authUrl?: string; note?: string } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [sort, setSort] = useState<{ k: SortKey; dir: 1 | -1 }>({ k: "value", dir: -1 });
   const [filter, setFilter] = useState("All");
@@ -49,6 +51,7 @@ export default function Dashboard({ report: initial, file: initialFile, rules, c
   }, [report]);
 
   const plans = useMemo(() => planAll(report, rulesObj), [report, rulesObj]);
+  const picks = useMemo(() => pickEntries(candidates, new Set(report.holdings_by_value.map((h) => h.id)), report.market.caution, rulesObj), [candidates, report, rulesObj]);
   const planOf = (id: string): ExitPlan | undefined => plans.find((p) => p.id === id);
   const total = report.holdings_total_value;
   const pnl = total - report.holdings_total_cost;
@@ -106,11 +109,22 @@ export default function Dashboard({ report: initial, file: initialFile, rules, c
       } catch (e) { setErr(`${row.s}: ${(e as Error).message}`); }
       setDone((d) => d + 1);
     }
+    let briefText: string | null = null;
     if (claude && Object.keys(out).length) {
       try {
         const res = await fetch("/api/brief", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ analyses: Object.values(out) }) });
-        if (res.ok) setBrief((await res.json()).brief);
+        if (res.ok) { briefText = (await res.json()).brief; setBrief(briefText); }
       } catch { /* optional */ }
+    }
+    if (Object.keys(out).length) {
+      try {
+        const res = await fetch("/api/gmail/draft", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ analyses: Object.values(out), brief: briefText }) });
+        const d = await res.json();
+        if (!res.ok) setMail({ note: `Gmail draft failed: ${d.error}` });
+        else if (d.status === "auth") setMail({ authUrl: d.authUrl });
+        else if (d.status === "drafted") setMail({ note: `Report saved as Gmail draft: ${d.subject}` });
+        else setMail(null);
+      } catch (e) { setMail({ note: `Gmail draft failed: ${(e as Error).message}` }); }
     }
     setRunning(false);
   }
@@ -154,6 +168,7 @@ export default function Dashboard({ report: initial, file: initialFile, rules, c
         <NavBtn v="overview" icon="▦" label="Overview" />
         <NavBtn v="holdings" icon="☰" label="Holdings" />
         <NavBtn v="exit" icon="↗" label="Exit plan" />
+        <NavBtn v="entry" icon="↘" label="Entry plan" />
         <NavBtn v="analytics" icon="◔" label="Analytics" />
         <div className="grow" />
         <button className="nav" onClick={toggleTheme}><span>◐</span>Toggle theme</button>
@@ -163,7 +178,7 @@ export default function Dashboard({ report: initial, file: initialFile, rules, c
       <main className="main">
         <div className="head">
           <div>
-            <h1>{view === "overview" ? "Overview" : view === "holdings" ? "Holdings" : view === "exit" ? "Exit plan" : "Analytics"}</h1>
+            <h1>{view === "overview" ? "Overview" : view === "holdings" ? "Holdings" : view === "exit" ? "Exit plan" : view === "entry" ? "Entry plan" : "Analytics"}</h1>
             <div className="muted sm">{rows.length} holdings · quant signals + news sentiment · read-only</div>
           </div>
           <div className="actions">
@@ -172,6 +187,8 @@ export default function Dashboard({ report: initial, file: initialFile, rules, c
               {running && <div className="bar"><i style={{ width: `${(done / rows.length) * 100}%` }} /></div>}
               {kite?.authUrl && <div className="muted sm">Kite login needed: <a href={kite.authUrl} target="_blank" rel="noreferrer">authorize here</a>, then click Run agents again.</div>}
               {kite?.note && <div className="muted sm">{kite.note}</div>}
+              {mail?.authUrl && <div className="muted sm">Gmail login needed: <a href={mail.authUrl} target="_blank" rel="noreferrer">authorize here</a>, then click Run agents again.</div>}
+              {mail?.note && <div className="muted sm">{mail.note}</div>}
             </div>
           </div>
         </div>
@@ -292,6 +309,50 @@ export default function Dashboard({ report: initial, file: initialFile, rules, c
           </>);
         })()}
 
+        {view === "entry" && (() => {
+          const all = [...picks.large, ...picks.mid];
+          const now = all.filter((p) => p.status === "Enter now").length;
+          const wait = all.filter((p) => p.status === "Wait for pullback").length;
+          const stat = (p: EntryPlan) => (p.status === "Enter now" ? "good" : p.status === "Wait for pullback" ? "warn" : "bad");
+          const meta = (id: string) => candidates.find((c) => c.id === id)!;
+          const table = (title: string, list: EntryPlan[], scanned: number) => (
+            <div className="card">
+              <h2>{title}</h2>
+              <div className="sub">Top {list.length} of {scanned} scanned, ranked by fundamentals, trend and distance to the entry zone. Stocks you already hold are excluded.</div>
+              {list.length === 0 ? <div className="empty">No candidates scanned for this tier yet. Run the kite-fundamental-analysis skill's candidate scan.</div> : (
+                <div className="tablewrap">
+                  <table>
+                    <thead><tr><th>Stock</th><th>Status</th><th className="n">Entry zone</th><th>Buy in steps</th><th className="n">Stop</th><th>Targets</th><th>Why</th></tr></thead>
+                    <tbody>
+                      {list.map((p) => { const c = meta(p.id), f = c.fundamentals, t = c.technicals; return (
+                        <tr key={p.id}>
+                          <td><div className="sym"><div><b>{sym(p.id)}</b><div className="sm muted">{f?.sector ?? "Unclassified"}{f?.market_cap_cr ? ` · ₹${Math.round(f.market_cap_cr / 1000).toLocaleString("en-IN")}k cr` : ""}</div><div className="sm muted">LTP {p.price.toLocaleString("en-IN")}{t ? ` · RSI ${t.rsi14} · ${t.trend}` : ""}</div></div></div></td>
+                          <td><span className={"pill " + stat(p)}>{p.status}</span><div className="sm muted">{p.signal}</div></td>
+                          <td className="n num">{p.zone ? <>{p.zone.low.toLocaleString("en-IN")} – {p.zone.high.toLocaleString("en-IN")}<div className="sm muted">{p.status === "Enter now" ? "price is in range" : `${p.away_pct}% below price`} · {p.zone.basis}</div></> : <span className="muted">–</span>}</td>
+                          <td className="num">{p.tranches.length ? p.tranches.map((x, i) => <div key={i} className="sm">{x.pct}% at {x.price.toLocaleString("en-IN")} <span className="muted">{x.why}</span></div>) : <span className="muted">–</span>}{p.avg_entry && <div className="sm muted">avg {p.avg_entry.toLocaleString("en-IN")}</div>}</td>
+                          <td className="n num">{p.stop ? <>{p.stop.price.toLocaleString("en-IN")}<div className="sm muted">-{p.stop.distance_pct}% · {p.stop.basis}</div></> : <span className="muted">–</span>}</td>
+                          <td className="num">{p.targets.length ? <>{p.targets.map((x) => <div key={x.price} className="sm">{x.price.toLocaleString("en-IN")} <span className="muted">+{x.gain_pct}%</span></div>)}{p.reward_risk != null && <div className="sm muted">reward/risk {p.reward_risk}</div>}</> : <span className="muted">–</span>}</td>
+                          <td className="sm">{p.reasons.map((x, i) => <div key={i}>{x}</div>)}{p.warnings.map((x, i) => <div key={"w" + i} className="muted">{x}</div>)}</td>
+                        </tr>); })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          );
+          return (<>
+            <div className="grid g4">
+              <div className="card kpi"><div className="lbl">Candidates scanned</div><div className="v">{picks.scanned.large + picks.scanned.mid}</div><div className="d">{picks.scanned.large} large · {picks.scanned.mid} mid cap{picks.scanned.other ? ` · ${picks.scanned.other} other (not shown)` : ""}</div></div>
+              <div className="card kpi"><div className="lbl">In the entry zone now</div><div className="v">{now}</div><div className="d">of the {all.length} shown</div></div>
+              <div className="card kpi"><div className="lbl">Waiting for a pullback</div><div className="v">{wait}</div><div className="d">limit levels below</div></div>
+              <div className="card kpi"><div className="lbl">Market</div><div className="v">{report.market.caution ? "Caution" : "Clear"}</div><div className="d">NIFTY {report.market.technicals.trend}, RSI {report.market.technicals.rsi14}</div></div>
+            </div>
+            {table("Large cap", picks.large, picks.scanned.large)}
+            {table("Mid cap", picks.mid, picks.scanned.mid)}
+            <div className="card"><div className="sub">How to read this: the entry zone is the nearest support below price (SMA20, SMA50 or SMA200) plus or minus your pullback band. "Buy in steps" splits the intended position across the zone so one price is never the whole bet. The stop and targets are measured from the average entry. Triggers use daily closes, so check after the close. Tune every number in the entry_plan and entry blocks of your rules.</div></div>
+          </>);
+        })()}
+
         {view === "analytics" && (<>
           <div className="grid g2">
             <div className="card">
@@ -331,7 +392,7 @@ export default function Dashboard({ report: initial, file: initialFile, rules, c
           </details>
         </>)}
 
-        <p className="disc">A rule-based screen of your own holdings, not investment advice. Stances describe whether quant signals and news agree. The exit plan applies your own thresholds in screen-rules.json mechanically; it does not know your tax position, holding period or goals. Read-only: no orders, GTTs or alerts are placed. Only company names go to the news feed and only scores go to the model API.</p>
+        <p className="disc">A rule-based screen of your own holdings, not investment advice. Stances describe whether quant signals and news agree. The exit and entry plans apply your own thresholds in screen-rules.json mechanically; it does not know your tax position, holding period or goals. Read-only: no orders, GTTs or alerts are placed. Only company names go to the news feed and only scores go to the model API.</p>
       </main>
 
       {sel_ && (<>

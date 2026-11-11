@@ -4,3 +4,4 @@ node_modules
 next-env.d.ts
 
 .kite-oauth.json
+.gmail-oauth.json

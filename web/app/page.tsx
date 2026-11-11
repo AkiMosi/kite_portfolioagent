@@ -14,5 +14,6 @@ export default function Page() {
     );
   const { report, file } = loaded;
   const holdings = report.results.filter((r) => r.sources.includes("holding"));
-  return <Dashboard report={{ ...report, results: holdings }} file={file} rules={loadRules()} claude={!!process.env.ANTHROPIC_API_KEY} />;
+  const candidates = report.results.filter((r) => !r.sources.includes("holding"));
+  return <Dashboard report={{ ...report, results: holdings }} candidates={candidates} file={file} rules={loadRules()} claude={!!process.env.ANTHROPIC_API_KEY} />;
 }

@@ -10,6 +10,7 @@ export type Fundamentals = {
   as_of: string; source: string; sector: string; pe: number | null; pb: number | null; roe: number | null;
   roce: number | null; debt_to_equity: number | null; sales_growth_3y: number | null;
   profit_growth_3y: number | null; dividend_yield: number | null; notes: string;
+  market_cap_cr?: number | null; is_financial?: boolean;
 };
 export type ScreenResult = {
   id: string; sources: string[]; signal: string; score: number; ltp: number;

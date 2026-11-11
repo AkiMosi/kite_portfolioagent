@@ -49,6 +49,21 @@
     "rsi_stretched": 75,
     "stale_fundamentals_days": 30
   },
+  "entry_plan": {
+    "_help": "Entry planner: which stocks you do not hold are worth watching, and at what price to start buying. Cap tiers use market cap in rupees crore from screener.in. Zone = nearest support below price (SMA20/50/200) plus or minus entry.pullback_band_pct. Buying is staggered in tranches (percent of your intended position). Stop and targets are measured from the average entry. null switches a rule off.",
+    "large_cap_min_cr": 100000,
+    "mid_cap_min_cr": 30000,
+    "picks_per_tier": 5,
+    "min_pullback_pct": 2,
+    "max_pullback_pct": 10,
+    "tranche_pcts": [40, 35, 25],
+    "stop_buffer_pct": 1,
+    "min_stop_distance_pct": 3,
+    "max_stop_distance_pct": 12,
+    "profit_target_pcts": [10, 20],
+    "min_reward_risk": 1.5,
+    "avoid_downtrend": true
+  },
   "exit": {
     "_help": "Exit planner: when and how much to sell. Sell-now triggers add up (capped at 100%). The stop is the nearest support below price, kept between min and max distance. Targets are a profit ladder on the shares left after the sell-now slice. null switches a rule off.",
     "min_profit_pct_for_trim": 5,
