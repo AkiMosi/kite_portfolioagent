@@ -1,4 +1,4 @@
-import type { ScreenResult } from "./types";
+import type { Report, ScreenResult } from "./types";
 
 // Entry planner: at which price to start buying, in how many steps, with what stop and targets.
 // Mirror image of exit.ts. Pure and deterministic (no network, no fs) so it runs in the browser and
@@ -158,4 +158,29 @@ export function pickEntries(candidates: ScreenResult[], held: Set<string>, marke
   const top = (tier: Tier) => plans.filter((p) => p.tier === tier).sort((a, b) => b.score - a.score).slice(0, c.plan.picks_per_tier);
   const n = (tier: Tier) => plans.filter((p) => p.tier === tier).length;
   return { large: top("large"), mid: top("mid"), scanned: { large: n("large"), mid: n("mid"), other: n("other") } };
+}
+
+export type HoldingBuy = EntryPlan & { qty: number; avg_cost: number; pnl_pct: number };
+
+/** Re-price a screen result at a live last price so zones and checks use today's price. Averages and RSI stay as scanned. */
+function atLivePrice(r: ScreenResult, ltp: number): ScreenResult {
+  const t = r.technicals;
+  if (!t || !on(ltp) || ltp <= 0) return r;
+  const vs = (ma: number) => (on(ma) && ma > 0 ? Math.round((ltp / ma - 1) * 1000) / 10 : 0);
+  return { ...r, ltp, technicals: { ...t, price: ltp, pct_vs_sma50: vs(t.sma50), pct_vs_sma200: vs(t.sma200) } };
+}
+
+/** Buy triggers for stocks you already hold (add-on or average-down levels). Same rules as pickEntries; nothing is hard-coded per stock. */
+export function planHoldingBuys(report: Report, marketCaution: boolean, rules: Record<string, unknown>): HoldingBuy[] {
+  const c = entryCfg(rules);
+  const val = new Map(report.holdings_by_value.map((h) => [h.id, h]));
+  const rank = (p: EntryPlan) => (p.status === "Enter now" ? 0 : p.status === "Wait for pullback" ? 1 : 2);
+  return report.results
+    .filter((r) => val.has(r.id))
+    .map((r) => {
+      const h = val.get(r.id)!;
+      const p = planEntry(atLivePrice(r, h.ltp), marketCaution, c);
+      return { ...p, qty: h.qty, avg_cost: h.avg, pnl_pct: h.cost ? r2(((h.value - h.cost) / h.cost) * 100) : 0 };
+    })
+    .sort((a, b) => rank(a) - rank(b) || a.away_pct - b.away_pct);
 }

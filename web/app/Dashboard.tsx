@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import type { Analysis, Report, ScreenResult } from "../lib/types";
 import { planAll, type ExitPlan } from "../lib/exit";
-import { pickEntries, type EntryPlan } from "../lib/entry";
+import { pickEntries, planHoldingBuys, type EntryPlan } from "../lib/entry";
 import { CAT, Donut, HBars, RangeBar, Scatter, Stacked, type Slice } from "./charts";
 
 const inr = (n: number) => (n < 0 ? "-" : "") + "₹" + Math.abs(Math.round(n)).toLocaleString("en-IN");
@@ -52,6 +52,7 @@ export default function Dashboard({ report: initial, candidates, file: initialFi
 
   const plans = useMemo(() => planAll(report, rulesObj), [report, rulesObj]);
   const picks = useMemo(() => pickEntries(candidates, new Set(report.holdings_by_value.map((h) => h.id)), report.market.caution, rulesObj), [candidates, report, rulesObj]);
+  const holdBuys = useMemo(() => planHoldingBuys(report, report.market.caution, rulesObj), [report, rulesObj]);
   const planOf = (id: string): ExitPlan | undefined => plans.find((p) => p.id === id);
   const total = report.holdings_total_value;
   const pnl = total - report.holdings_total_cost;
@@ -318,7 +319,7 @@ export default function Dashboard({ report: initial, candidates, file: initialFi
           const table = (title: string, list: EntryPlan[], scanned: number) => (
             <div className="card">
               <h2>{title}</h2>
-              <div className="sub">Top {list.length} of {scanned} scanned, ranked by fundamentals, trend and distance to the entry zone. Stocks you already hold are excluded.</div>
+              <div className="sub">Top {list.length} of {scanned} scanned, ranked by fundamentals, trend and distance to the entry zone. Stocks you already hold are excluded; their add-on triggers are in the table above.</div>
               {list.length === 0 ? <div className="empty">No candidates scanned for this tier yet. Run the kite-fundamental-analysis skill's candidate scan.</div> : (
                 <div className="tablewrap">
                   <table>
@@ -346,6 +347,27 @@ export default function Dashboard({ report: initial, candidates, file: initialFi
               <div className="card kpi"><div className="lbl">In the entry zone now</div><div className="v">{now}</div><div className="d">of the {all.length} shown</div></div>
               <div className="card kpi"><div className="lbl">Waiting for a pullback</div><div className="v">{wait}</div><div className="d">limit levels below</div></div>
               <div className="card kpi"><div className="lbl">Market</div><div className="v">{report.market.caution ? "Caution" : "Clear"}</div><div className="d">NIFTY {report.market.technicals.trend}, RSI {report.market.technicals.rsi14}</div></div>
+            </div>
+            <div className="card">
+              <h2>Your holdings: buy triggers</h2>
+              <div className="sub">Add-on levels for stocks you already own, from the same entry rules, priced at your live holdings price. Place limit or GTT buys at these levels; stocks in a downtrend get no trigger. "vs your avg" compares each level with your average cost.</div>
+              <div className="tablewrap">
+                <table>
+                  <thead><tr><th>Holding</th><th>Status</th><th className="n">Entry zone</th><th>Buy in steps</th><th className="n">Stop</th><th>Targets</th><th>Why</th></tr></thead>
+                  <tbody>
+                    {holdBuys.map((p) => { const none = p.status === "Avoid for now"; return (
+                      <tr key={p.id} onClick={() => setSel(p.id)}>
+                        <td><div><b>{sym(p.id)}</b><div className="sm muted">{p.qty} sh · avg {p.avg_cost.toLocaleString("en-IN", { maximumFractionDigits: 2 })} · {pct(p.pnl_pct)}</div><div className="sm muted">LTP {p.price.toLocaleString("en-IN")}</div></div></td>
+                        <td><span className={"pill " + stat(p)}>{p.status}</span><div className="sm muted">{p.signal}</div></td>
+                        <td className="n num">{p.zone && !none ? <>{p.zone.low.toLocaleString("en-IN")} – {p.zone.high.toLocaleString("en-IN")}<div className="sm muted">{p.status === "Enter now" ? "price is in range" : `${p.away_pct}% below price`} · {p.zone.basis}</div></> : <span className="muted">–</span>}</td>
+                        <td className="num">{!none && p.tranches.length ? p.tranches.map((x, i) => <div key={i} className="sm">{x.pct}% at {x.price.toLocaleString("en-IN")} <span className="muted">{pct((x.price / p.avg_cost - 1) * 100)} vs your avg</span></div>) : <span className="muted">No buy trigger</span>}</td>
+                        <td className="n num">{p.stop && !none ? <>{p.stop.price.toLocaleString("en-IN")}<div className="sm muted">-{p.stop.distance_pct}% · {p.stop.basis}</div></> : <span className="muted">–</span>}</td>
+                        <td className="num">{!none && p.targets.length ? <>{p.targets.map((x) => <div key={x.price} className="sm">{x.price.toLocaleString("en-IN")} <span className="muted">+{x.gain_pct}%</span></div>)}{p.reward_risk != null && <div className="sm muted">reward/risk {p.reward_risk}</div>}</> : <span className="muted">–</span>}</td>
+                        <td className="sm">{p.reasons.map((x, i) => <div key={i}>{x}</div>)}{p.warnings.map((x, i) => <div key={"w" + i} className="muted">{x}</div>)}</td>
+                      </tr>); })}
+                  </tbody>
+                </table>
+              </div>
             </div>
             {table("Large cap", picks.large, picks.scanned.large)}
             {table("Mid cap", picks.mid, picks.scanned.mid)}
