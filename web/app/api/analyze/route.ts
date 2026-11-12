@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 export async function GET(req: Request) {
   const id = new URL(req.url).searchParams.get("id");
   const loaded = loadLatestReport();
-  if (!loaded) return NextResponse.json({ error: "No report found. Run the kite-fundamental-analysis skill first." }, { status: 404 });
+  if (!loaded) return NextResponse.json({ error: "No screen yet. Click Run agents to build one from Kite." }, { status: 404 });
   const r = loaded.report.results.find((x) => x.id === id);
   if (!r) return NextResponse.json({ error: "Unknown stock" }, { status: 404 });
   try {

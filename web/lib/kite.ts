@@ -35,7 +35,7 @@ const g = globalThis as unknown as { __kite?: { client: Client; provider: Provid
 
 export type Connect = { client: Client } | { authUrl: string };
 
-async function connect(): Promise<Connect> {
+export async function connect(): Promise<Connect> {
   if (g.__kite) return { client: g.__kite.client };
   const provider = new Provider();
   const transport = new StreamableHTTPClientTransport(new URL(MCP_URL), { authProvider: provider });
@@ -72,7 +72,96 @@ function textOf(res: unknown): string {
   return c.map((b) => (b.type === "text" ? b.text ?? "" : "")).join("");
 }
 
-async function callHoldings(client: Client): Promise<Raw[]> {
+type Tool = Awaited<ReturnType<Client["listTools"]>>["tools"][number];
+const toolCache = new WeakMap<Client, Tool[]>();
+async function toolsOf(client: Client): Promise<Tool[]> {
+  const hit = toolCache.get(client);
+  if (hit) return hit;
+  const tools = (await client.listTools()).tools;
+  toolCache.set(client, tools);
+  return tools;
+}
+
+/** Call a tool and return its rows, following {data, pagination} pages when the server uses them. */
+async function callRows(client: Client, name: string, args: Record<string, unknown>): Promise<Raw[]> {
+  const all: Raw[] = [];
+  for (let from = 0, guard = 0; guard < 50; guard++) {
+    const res = await client.callTool({ name, arguments: from ? { ...args, from } : args });
+    const text = textOf(res);
+    if ((res as { isError?: boolean }).isError) throw new Error(text || `${name} returned an error`);
+    let json: unknown;
+    try { json = JSON.parse(text); } catch { throw new Error(text.slice(0, 300) || `${name} returned non-JSON`); }
+    const data = Array.isArray(json) ? json : (json as { data?: unknown }).data;
+    const rows = Array.isArray(data) ? data : data && typeof data === "object" ? [data as Raw] : [];
+    all.push(...(rows as Raw[]));
+    const pg = (json as { pagination?: { has_more?: boolean; returned?: number } }).pagination;
+    if (!pg?.has_more) break;
+    from += pg.returned ?? rows.length;
+  }
+  return all;
+}
+
+/** Map our intent onto whatever argument names the server's schema uses. */
+function argsFor(tool: Tool, wanted: [RegExp, unknown][]): Record<string, unknown> {
+  const props = Object.keys((tool.inputSchema as { properties?: Record<string, unknown> }).properties ?? {});
+  const out: Record<string, unknown> = {};
+  for (const [re, v] of wanted) { const p = props.find((x) => re.test(x)); if (p) out[p] = v; }
+  return out;
+}
+
+// NIFTY 50's index token is fixed by the exchange; instrument search for indices is unreliable across servers.
+const KNOWN_TOKENS: Record<string, number> = { "NSE:NIFTY 50": 256265 };
+const TOKENS_FILE = () => path.join(dataDir(), "data", "cache", "instruments.json");
+
+/** Resolve "NSE:ITC" to Kite's instrument_token, caching the mapping on disk. */
+export async function instrumentToken(client: Client, id: string): Promise<number | null> {
+  if (KNOWN_TOKENS[id]) return KNOWN_TOKENS[id];
+  let cache: Record<string, number> = {};
+  try { cache = JSON.parse(fs.readFileSync(TOKENS_FILE(), "utf8")); } catch { /* first run */ }
+  if (cache[id]) return cache[id];
+  const tool = (await toolsOf(client)).find((t) => /search_instruments|instruments/i.test(t.name));
+  if (!tool) throw new Error("Kite MCP has no instrument search tool.");
+  const [exchange, symbol] = id.split(":");
+  const rows = await callRows(client, tool.name, argsFor(tool, [[/^query$/i, id], [/^filter_on$/i, "id"], [/^limit$/i, 5]]));
+  const hit = rows.find((r) => r.exchange === exchange && r.tradingsymbol === symbol) ?? rows.find((r) => r.id === id);
+  const token = hit ? Number(hit.instrument_token) : null;
+  if (token) {
+    cache[id] = token;
+    fs.mkdirSync(path.dirname(TOKENS_FILE()), { recursive: true });
+    fs.writeFileSync(TOKENS_FILE(), JSON.stringify(cache, null, 2));
+  }
+  return token;
+}
+
+export type RawCandle = { date: string; open: number; high: number; low: number; close: number; volume: number };
+
+// Kite caps one daily-candle request at 2000 days; stay under it.
+const MAX_DAYS_PER_CALL = 1900;
+const kiteDate = (d: Date) => d.toISOString().slice(0, 10) + " 00:00:00";
+
+/** Daily candles for [from, to] from the Kite MCP historical-data tool, chunked under Kite's per-call cap. */
+export async function dailyCandles(client: Client, token: number, from: Date, to: Date): Promise<RawCandle[]> {
+  const tools = await toolsOf(client);
+  const tool = tools.find((t) => /historical/i.test(t.name));
+  if (!tool) throw new Error(`Kite MCP has no historical data tool. Server offers: ${tools.map((t) => t.name).join(", ")}`);
+  const out: RawCandle[] = [];
+  for (let start = new Date(from); start <= to; ) {
+    const end = new Date(Math.min(to.getTime(), start.getTime() + MAX_DAYS_PER_CALL * 864e5));
+    const rows = await callRows(client, tool.name, argsFor(tool, [
+      [/instrument_token|^token$/i, token], [/^from(_date)?$/i, kiteDate(start)], [/^to(_date)?$/i, kiteDate(end)], [/^interval$/i, "day"],
+    ]));
+    for (const r of rows as unknown[]) {
+      const c = (Array.isArray(r) ? { date: r[0], open: r[1], high: r[2], low: r[3], close: r[4], volume: r[5] } : r) as Raw;
+      out.push({ date: String(c.date).slice(0, 10), open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close), volume: Number(c.volume ?? 0) });
+    }
+    start = new Date(end.getTime() + 864e5);
+    // Kite allows ~3 historical requests per second; pace calls so long backfills don't get throttled.
+    await new Promise((res) => setTimeout(res, 350));
+  }
+  return out;
+}
+
+export async function callHoldings(client: Client): Promise<Raw[]> {
   const tools = (await client.listTools()).tools;
   const direct = tools.find((t) => /^(get_)?holdings$/.test(t.name));
   const consolidated = tools.find((t) => t.name === "portfolio");

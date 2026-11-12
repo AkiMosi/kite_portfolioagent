@@ -1,3 +1,4 @@
+import BuildScreen from "./BuildScreen";
 import Dashboard from "./Dashboard";
 import { loadLatestReport, loadRules } from "../lib/data";
 
@@ -9,7 +10,8 @@ export default function Page() {
     return (
       <main className="main">
         <h1>Portfolio Agent</h1>
-        <p className="muted">No report found in the data folder. Run the kite-fundamental-analysis skill to create one, then reload.</p>
+        <p className="muted">No screen yet. Build one from your Kite holdings and the stocks in data/fundamentals.json.</p>
+        <BuildScreen />
       </main>
     );
   const { report, file } = loaded;
