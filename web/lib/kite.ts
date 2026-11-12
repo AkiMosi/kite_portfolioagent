@@ -119,10 +119,15 @@ export async function instrumentToken(client: Client, id: string): Promise<numbe
   let cache: Record<string, number> = {};
   try { cache = JSON.parse(fs.readFileSync(TOKENS_FILE(), "utf8")); } catch { /* first run */ }
   if (cache[id]) return cache[id];
-  const tool = (await toolsOf(client)).find((t) => /search_instruments|instruments/i.test(t.name));
-  if (!tool) throw new Error("Kite MCP has no instrument search tool.");
+  const tools = await toolsOf(client);
+  const direct = tools.find((t) => /search_instruments|instruments/i.test(t.name));
+  const market = tools.find((t) => t.name === "market");
+  if (!direct && !market) throw new Error(`Kite MCP has no instrument search tool. Server offers: ${tools.map((t) => t.name).join(", ")}`);
   const [exchange, symbol] = id.split(":");
-  const rows = await callRows(client, tool.name, argsFor(tool, [[/^query$/i, id], [/^filter_on$/i, "id"], [/^limit$/i, 5]]));
+  // The hosted server folds search into its consolidated "market" tool (mode "search", exact lookup by id).
+  const rows = direct
+    ? await callRows(client, direct.name, argsFor(direct, [[/^query$/i, id], [/^filter_on$/i, "id"], [/^limit$/i, 5]]))
+    : await callRows(client, market!.name, { mode: "search", search_mode: "get_by_id", id });
   const hit = rows.find((r) => r.exchange === exchange && r.tradingsymbol === symbol) ?? rows.find((r) => r.id === id);
   const token = hit ? Number(hit.instrument_token) : null;
   if (token) {
@@ -142,14 +147,20 @@ const kiteDate = (d: Date) => d.toISOString().slice(0, 10) + " 00:00:00";
 /** Daily candles for [from, to] from the Kite MCP historical-data tool, chunked under Kite's per-call cap. */
 export async function dailyCandles(client: Client, token: number, from: Date, to: Date): Promise<RawCandle[]> {
   const tools = await toolsOf(client);
-  const tool = tools.find((t) => /historical/i.test(t.name));
-  if (!tool) throw new Error(`Kite MCP has no historical data tool. Server offers: ${tools.map((t) => t.name).join(", ")}`);
+  const direct = tools.find((t) => /historical/i.test(t.name));
+  const market = tools.find((t) => t.name === "market");
+  if (!direct && !market) throw new Error(`Kite MCP has no historical data tool. Server offers: ${tools.map((t) => t.name).join(", ")}`);
   const out: RawCandle[] = [];
   for (let start = new Date(from); start <= to; ) {
     const end = new Date(Math.min(to.getTime(), start.getTime() + MAX_DAYS_PER_CALL * 864e5));
-    const rows = await callRows(client, tool.name, argsFor(tool, [
-      [/instrument_token|^token$/i, token], [/^from(_date)?$/i, kiteDate(start)], [/^to(_date)?$/i, kiteDate(end)], [/^interval$/i, "day"],
-    ]));
+    // The hosted server's consolidated "market" tool takes mode "historical" and plain YYYY-MM-DD dates.
+    const rows = direct
+      ? await callRows(client, direct.name, argsFor(direct, [
+          [/instrument_token|^token$/i, token], [/^from(_date)?$/i, kiteDate(start)], [/^to(_date)?$/i, kiteDate(end)], [/^interval$/i, "day"],
+        ]))
+      : await callRows(client, market!.name, {
+          mode: "historical", instrument_token: token, interval: "day", from_date: kiteDate(start).slice(0, 10), to_date: kiteDate(end).slice(0, 10),
+        });
     for (const r of rows as unknown[]) {
       const c = (Array.isArray(r) ? { date: r[0], open: r[1], high: r[2], low: r[3], close: r[4], volume: r[5] } : r) as Raw;
       out.push({ date: String(c.date).slice(0, 10), open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close), volume: Number(c.volume ?? 0) });
