@@ -1,3 +1,6 @@
 # Personal portfolio data - keep out of version control
 reports/
 data/cache/
+
+# Fundamentals for the stocks you hold: kept out of this public repo
+data/fundamentals.private.json

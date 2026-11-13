@@ -16,8 +16,19 @@ export type RawHolding = Record<string, unknown>;
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
+const readJson = (file: string): Record<string, FundamentalsRow> => {
+  try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return {}; }
+};
+
+/**
+ * Public fundamentals (data/fundamentals.json, the shared watchlist) merged with a private file for the stocks
+ * you actually hold. The private file stays out of this public repo because the list of stocks you own is
+ * personal: by default data/fundamentals.private.json (gitignored), or KITE_PRIVATE_FUNDAMENTALS, e.g. a file
+ * in a private repo that the routine clones alongside this one. Private entries win on conflict.
+ */
 export function loadFundamentals(): Record<string, FundamentalsRow> {
-  try { return JSON.parse(fs.readFileSync(path.join(dataDir(), "data", "fundamentals.json"), "utf8")); } catch { return {}; }
+  const privateFile = process.env.KITE_PRIVATE_FUNDAMENTALS || path.join(dataDir(), "data", "fundamentals.private.json");
+  return { ...readJson(path.join(dataDir(), "data", "fundamentals.json")), ...readJson(privateFile) };
 }
 
 export function toHoldingRows(raw: RawHolding[]): HoldingRow[] {
