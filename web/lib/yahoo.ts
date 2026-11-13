@@ -30,7 +30,14 @@ type ChartResult = {
 async function fetchChart(ticker: string, from: Date, to: Date): Promise<Candle[]> {
   const url = `${CHART}${encodeURIComponent(ticker)}?period1=${Math.floor(from.getTime() / 1000)}&period2=${Math.floor(to.getTime() / 1000)}&interval=1d`;
   // Yahoo rejects requests without a browser-like user agent.
-  const res = await fetch(url, { headers: { "user-agent": "Mozilla/5.0 (portfolio-screen)" }, signal: AbortSignal.timeout(15000) });
+  let res: Response;
+  try {
+    res = await fetch(url, { headers: { "user-agent": "Mozilla/5.0 (portfolio-screen)" }, signal: AbortSignal.timeout(15000) });
+  } catch (e) {
+    // Node's bare "fetch failed" hides the cause; name the host so a blocked network is obvious in routine logs.
+    const cause = (e as { cause?: { code?: string; message?: string } }).cause;
+    throw new Error(`Yahoo ${ticker}: cannot reach ${new URL(url).host} (${cause?.code ?? cause?.message ?? (e as Error).message})`);
+  }
   if (!res.ok) throw new Error(`Yahoo ${ticker}: HTTP ${res.status}`);
   const json = (await res.json()) as { chart?: { result?: ChartResult[] | null; error?: { description?: string } | null } };
   const r = json.chart?.result?.[0];
