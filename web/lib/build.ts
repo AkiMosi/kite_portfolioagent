@@ -41,7 +41,9 @@ export async function buildScreen(): Promise<Build> {
     const heldSymbols = new Set(holdings.map((h) => h.id.split(":")[1]));
     const watch = Object.keys(fundamentals).filter((s) => !heldSymbols.has(s)).map((s) => `NSE:${s}`);
 
-    const nifty = computeTechnicals(await getCandles(client, "NSE:NIFTY 50"));
+    // Kite historical candles need the paid Connect plan; only pass the client as a fallback when the user has it.
+    const kiteFallback = process.env.KITE_HISTORICAL === "1" ? client : undefined;
+    const nifty = computeTechnicals(await getCandles("NSE:NIFTY 50", 2, kiteFallback));
     if (!nifty) throw new Error("Not enough NIFTY 50 history to compute the market regime.");
 
     const missing: string[] = [];
@@ -51,7 +53,7 @@ export async function buildScreen(): Promise<Build> {
       let technicals = null;
       let lastClose = 0;
       try {
-        const candles = await getCandles(client, id);
+        const candles = await getCandles(id, 2, kiteFallback);
         technicals = computeTechnicals(candles);
         lastClose = candles.at(-1)?.close ?? 0;
         if (!technicals) missing.push(`${symbol} (under 200 days of history)`);

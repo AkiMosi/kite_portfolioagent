@@ -41,6 +41,15 @@ Set in `web/.env.local` (all optional):
 | `ANTHROPIC_MODEL` | Model override (default `claude-haiku-5-5`). |
 | `GMAIL_MCP_URL` | Gmail MCP server URL. When set, every **Run agents** saves the report as a Gmail draft (no recipient, never sent). |
 | `KITE_DATA_DIR` | Folder holding `screen-rules.json`, `data/` and `reports/` (default: parent of `web/`). |
+| `KITE_HISTORICAL` | Set to `1` only if your Kite account has the paid Connect plan (₹500/month). Kite is then used as a fallback source for daily candles when Yahoo fails. |
+
+## Price history
+
+**Run agents** builds the whole screen: live holdings from Kite, plus daily candles for each stock and NIFTY 50, which give SMA, RSI, trend and the 52-week range.
+
+Candles come from Yahoo Finance's public chart endpoint. It needs no key. Kite's free plan doesn't include historical candles; they're part of the paid Connect plan. The endpoint is unofficial and for personal use only, so it can change without notice.
+
+Candles are cached in `data/cache/candles/` (gitignored). After the first run, each run only fetches the days since the last cached close.
 
 ## Gmail draft report
 
