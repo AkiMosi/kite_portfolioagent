@@ -11,13 +11,14 @@ const CHART = "https://query1.finance.yahoo.com/v8/finance/chart/";
 const INDEX_SYMBOLS: Record<string, string> = { "NSE:NIFTY 50": "^NSEI", "NSE:NIFTY BANK": "^NSEBANK" };
 
 /**
- * Yahoo tickers to try for a Kite id, best first. Each exchange falls back to the other listing of the same
- * company, because Yahoo is missing some recent NSE listings (e.g. NSDL) that it carries on BSE.
+ * Yahoo tickers to try for a Kite id, best first. The NSE listing comes first even for BSE holdings: it is the
+ * same company and price, and Yahoo's BSE history is often short (HDFCBANK.BO had under 200 days). BSE is the
+ * fallback because Yahoo is missing some recent NSE listings (e.g. NSDL) that it carries on BSE.
  */
 export function yahooSymbols(id: string): string[] {
   if (INDEX_SYMBOLS[id]) return [INDEX_SYMBOLS[id]];
-  const [exchange, symbol] = id.split(":");
-  return exchange === "BSE" ? [`${symbol}.BO`, `${symbol}.NS`] : [`${symbol}.NS`, `${symbol}.BO`];
+  const symbol = id.split(":")[1];
+  return [`${symbol}.NS`, `${symbol}.BO`];
 }
 
 type ChartResult = {
